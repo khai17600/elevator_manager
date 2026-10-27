@@ -29,6 +29,7 @@ setup(
 	        'map_switcher = elevator_robot.map_switcher:main',
             'elevator_manager = elevator_robot.elevator_manager:main',
             'elevator_gui = elevator_robot.elevator_gui:main',
+            'elevator_entry_test = elevator_robot.elevator_entry_test:main',
         ],
     },
 )
