@@ -27,7 +27,7 @@ from std_msgs.msg import String, Int32
 # CONFIG
 # ============================================================
 
-MQTT_BROKER = "10.11.55.162"
+MQTT_BROKER = "10.11.60.85"
 MQTT_PORT = 1883
 
 REQUEST_TOPIC = "elevator/request"
