@@ -69,21 +69,23 @@ class ElevatorMqtt:
                 self.generation += 1
                 if self.guard:
                     self.guard_failure = "ESP khởi động lại trong chuyến."
+            # Match replies even when a newer heartbeat already updated the snapshot.
+            pending = self.pending.get(data.get('request_id'))
+            if pending and data['result'] in ('ACCEPTED', 'COMPLETED', 'REJECTED'):
+                request = pending['request']
+                keys = ('robot_id', 'session_id', 'trip_id', 'request_id', 'command', 'command_seq')
+                same_boot = not request['boot_id'] or data['boot_id'] == request['boot_id']
+                if same_boot and all(data.get(key) == request[key] for key in keys):
+                    # Do not replace a terminal response with a delayed ACCEPTED.
+                    previous = pending['response']
+                    if not previous or previous['result'] == 'ACCEPTED':
+                        pending['response'] = data
             if old and old['boot_id'] == data['boot_id'] and data['status_seq'] <= old['status_seq']:
                 return False
             self.snapshot = data
             self.received_at = time.monotonic()
             if self.guard and self.expected_hold_floor is not None and not self._held(data, self.expected_hold_floor):
                 self.guard_failure = "ESP không còn giữ cửa tại tầng robot đang vào/ra."
-            pending = self.pending.get(data.get('request_id'))
-            if pending:
-                request = pending['request']
-                keys = ('robot_id', 'session_id', 'trip_id', 'request_id', 'command', 'command_seq')
-                if all(data.get(key) == request[key] for key in keys):
-                    # Do not replace a terminal response with a delayed ACCEPTED.
-                    previous = pending['response']
-                    if not previous or previous['result'] == 'ACCEPTED':
-                        pending['response'] = data
             return True
 
     def _held(self, data, floor):
@@ -95,6 +97,12 @@ class ElevatorMqtt:
         with self.lock:
             return (self.connected and self.snapshot is not None and
                     time.monotonic() - self.received_at <= self.heartbeat_timeout)
+
+    def fresh_snapshot(self, max_age):
+        with self.lock:
+            if self.healthy() and time.monotonic() - self.received_at <= max_age:
+                return dict(self.snapshot)
+            return None
 
     def begin_guard(self):
         with self.lock:
@@ -126,7 +134,7 @@ class ElevatorMqtt:
                 raise RuntimeError(self.guard_failure)
 
     def request(self, command, *, trip_id='', destination_floor=None,
-                expected_floor=None, timeout=15.0, check=lambda: None):
+                expected_floor=None, timeout=15.0, check=lambda: None, on_accepted=None):
         check()
         with self.lock:
             if not self.connected:
@@ -156,6 +164,7 @@ class ElevatorMqtt:
         payload = json.dumps(request)
         deadline = time.monotonic() + timeout
         attempts, next_send = 0, 0.0
+        accepted_reported = False
         try:
             while True:
                 check()
@@ -182,6 +191,9 @@ class ElevatorMqtt:
                         if not valid:
                             raise RuntimeError(f"Trạng thái ESP không còn phù hợp với {command}.")
                         return dict(current)
+                if on_accepted is not None and not accepted_reported and response and response['result'] == 'ACCEPTED':
+                    accepted_reported = True
+                    on_accepted()
                 now = time.monotonic()
                 if now >= deadline:
                     raise TimeoutError(f"Không nhận COMPLETED cho {command} trong {timeout}s.")

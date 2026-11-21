@@ -33,7 +33,7 @@ from std_msgs.msg import String, Int32
 # CONFIG
 # ============================================================
 
-MQTT_BROKER = "10.11.53.59"
+MQTT_BROKER = "10.11.50.162"
 MQTT_PORT = 1883
 
 REQUEST_TOPIC = "elevator/request"
@@ -700,7 +700,13 @@ class ElevatorManager(Node):
         except (ValueError, TypeError, KeyError) as error:
             self.get_logger().warning(f"Bỏ bản tin MQTT không hợp lệ: {error}")
 
-    def request_elevator_status(self, check=True):
+    def request_elevator_status(self, check=True, *, max_age=None):
+        if max_age is not None:
+            if check:
+                self._check_running()
+            snapshot = self.elevator_link.fresh_snapshot(max_age)
+            if snapshot is not None:
+                return snapshot
         return self.elevator_link.request(
             "GET_STATUS", trip_id=self.trip_id, timeout=8.0,
             check=self._check_running if check else lambda: None,
@@ -708,9 +714,14 @@ class ElevatorManager(Node):
 
     def call_elevator(self, floor, timeout=60.0):
         self.current_step = "WAITING_ELEVATOR"
+
+        def on_accepted():
+            self.current_step = "ELEVATOR_MOVING"
+            self.get_logger().info(f"Thang đã nhận lệnh di chuyển tới tầng {floor}.")
+
         return self.elevator_link.request(
             "CALL_ELEVATOR", trip_id=self.trip_id, destination_floor=floor,
-            timeout=timeout, check=self._check_running,
+            timeout=timeout, check=self._check_running, on_accepted=on_accepted,
         )
 
     # ========================================================
@@ -1739,7 +1750,7 @@ class ElevatorManager(Node):
             # Kiểm tra vị trí hiện tại của thang
             # =================================================
 
-            status = self.request_elevator_status()
+            status = self.request_elevator_status(max_age=2.0)
             if status["moving"]:
                 raise RuntimeError("Thang đang di chuyển; chưa thể bắt đầu chuyến.")
             self.elevator_link.begin_guard()
